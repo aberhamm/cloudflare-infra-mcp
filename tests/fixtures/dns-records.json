@@ -1,0 +1,34 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": [
+    {
+      "id": "rec_aaa111",
+      "type": "A",
+      "name": "example.com",
+      "content": "1.2.3.4",
+      "proxied": true,
+      "ttl": 1,
+      "created_on": "2025-01-01T00:00:00Z",
+      "modified_on": "2025-01-01T00:00:00Z"
+    },
+    {
+      "id": "rec_bbb222",
+      "type": "CNAME",
+      "name": "www.example.com",
+      "content": "example.com",
+      "proxied": true,
+      "ttl": 1,
+      "created_on": "2025-01-01T00:00:00Z",
+      "modified_on": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 50,
+    "total_pages": 1,
+    "count": 2,
+    "total_count": 2
+  }
+}

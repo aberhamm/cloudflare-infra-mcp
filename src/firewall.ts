@@ -76,6 +76,12 @@ const CreateWafInput = z.object({
   ]),
   description: z.string().optional().default(""),
   enabled: z.boolean().optional().default(true),
+  action_parameters: z
+    .record(z.unknown())
+    .optional()
+    .describe(
+      'Parameters for the action. Required for "skip" (e.g. {"ruleset":"current","phases":["http_request_firewall_managed"]})',
+    ),
   dry_run: z
     .boolean()
     .optional()
@@ -84,12 +90,15 @@ const CreateWafInput = z.object({
 });
 
 async function createWafCustomRule(input: Record<string, unknown>) {
-  const { zone, expression, action, description, enabled, dry_run } =
+  const { zone, expression, action, description, enabled, action_parameters, dry_run } =
     CreateWafInput.parse(input);
   const zoneId = await resolveZone(zone);
   const { ruleset, rules } = await getCustomRulesetWithRules(zoneId);
 
-  const newRule = { action, expression, description, enabled };
+  const newRule: Record<string, unknown> = { action, expression, description, enabled };
+  if (action_parameters) {
+    newRule.action_parameters = action_parameters;
+  }
 
   if (dry_run) {
     return textResult({
@@ -137,6 +146,7 @@ const UpdateWafInput = z.object({
     .optional(),
   description: z.string().optional(),
   enabled: z.boolean().optional(),
+  action_parameters: z.record(z.unknown()).optional(),
   dry_run: z.boolean().optional().default(false),
 });
 

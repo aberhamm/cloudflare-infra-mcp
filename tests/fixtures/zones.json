@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": [
+    {
+      "id": "abc123def456abc123def456abc12345",
+      "name": "example.com",
+      "status": "active",
+      "paused": false,
+      "type": "full",
+      "name_servers": ["aria.ns.cloudflare.com", "kirk.ns.cloudflare.com"]
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 50,
+    "total_pages": 1,
+    "count": 1,
+    "total_count": 1
+  }
+}

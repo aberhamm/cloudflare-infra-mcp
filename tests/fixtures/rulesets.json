@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": [
+    {
+      "id": "rs_custom_001",
+      "name": "Custom WAF rules",
+      "kind": "zone",
+      "phase": "http_request_firewall_custom",
+      "rules": [
+        {
+          "id": "rule_001",
+          "action": "block",
+          "expression": "ip.src == 10.0.0.1",
+          "description": "Block test IP",
+          "enabled": true,
+          "last_updated": "2025-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "rs_managed_001",
+      "name": "Cloudflare Managed Ruleset",
+      "kind": "managed",
+      "phase": "http_request_firewall_managed"
+    }
+  ]
+}

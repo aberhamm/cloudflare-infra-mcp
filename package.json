@@ -14,6 +14,7 @@
     "dev": "npx tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:smoke": "vitest run tests/smoke/",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },

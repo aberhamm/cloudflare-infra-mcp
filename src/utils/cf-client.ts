@@ -57,9 +57,11 @@ async function request<T>(
   }
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${getToken()}`,
-    "Content-Type": "application/json",
+    Authorization: `Bearer ${getToken().trim()}`,
   };
+  if (body) {
+    headers["Content-Type"] = "application/json";
+  }
 
   const res = await fetch(url.toString(), {
     method,
