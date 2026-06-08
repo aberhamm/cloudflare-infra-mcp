@@ -21,7 +21,7 @@ Cloudflare's ecosystem has **16+ MCP servers** already. They all focus on the de
 - **DNS record management** — list, create/update (idempotent upsert), delete, export as BIND
 - **WAF custom rules** — create block/challenge/skip/log rules with CF expressions, dry-run preview
 - **Cloudflare Tunnels** — create remotely-managed tunnels, configure ingress, get run tokens
-- **Zero Trust Access** — create applications and policies (email, domain, IP, service token)
+- **Zero Trust Access** — create applications, policies, and service tokens (email, domain, IP, service token)
 - **Composable operations** — `setup_tunnel_with_dns` (tunnel + CNAME + ingress in one call), `block_ips` (IP Lists + WAF rule for Fail2Ban integration), `setup_access_for_tunnel`
 - **Safety** — `dry_run` on all mutations, destructive operations tagged in MCP metadata, previous/new state diffs on every write
 
@@ -66,10 +66,12 @@ Create a scoped token at [dash.cloudflare.com/profile/api-tokens](https://dash.c
 | Zone | Zone WAF → Edit |
 | Account | Cloudflare Tunnel → Edit |
 | Account | Access: Apps and Policies → Edit |
+| Account | Access: Service Tokens → Read |
+| Account | Access: Service Tokens → Edit |
 
 Set zone resources to **All zones** or select specific ones. You can start with just DNS and add scopes as needed — tools will return clear auth errors for missing permissions.
 
-## Tools (24)
+## Tools (27)
 
 ### Zones (3)
 
@@ -108,14 +110,17 @@ Set zone resources to **All zones** or select specific ones. You can start with 
 | `get_tunnel_config` | Get ingress configuration |
 | `update_tunnel_config` | Set hostname → service routing |
 
-### Zero Trust Access (4)
+### Zero Trust Access (7)
 
 | Tool | Description |
 |------|-------------|
 | `list_access_applications` | List Access applications |
 | `create_access_application` | Create self-hosted application for a hostname |
 | `list_access_policies` | List policies for an application |
+| `list_access_service_tokens` | List service tokens, optionally filtered by exact name |
+| `create_access_service_token` | Create a service token and return the one-time client secret |
 | `create_access_policy` | Allow/deny by email, domain, IP, or service token |
+| `create_access_service_token_policy` | Create a Service Auth policy for one service token |
 
 ### Composable Operations (3)
 

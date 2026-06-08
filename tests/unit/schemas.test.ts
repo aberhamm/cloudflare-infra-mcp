@@ -23,6 +23,40 @@ const UpsertDnsInput = z.object({
   dry_run: z.boolean().optional().default(false),
 });
 
+const AccessIncludeRuleInput = z
+  .object({
+    email: z.object({ email: z.string() }).optional(),
+    email_domain: z.object({ domain: z.string() }).optional(),
+    ip: z.object({ ip: z.string() }).optional(),
+    service_token: z.object({ token_id: z.string().min(1) }).optional(),
+    any_valid_service_token: z.object({}).optional(),
+  })
+  .refine(
+    (rule) =>
+      [
+        rule.email,
+        rule.email_domain,
+        rule.ip,
+        rule.service_token,
+        rule.any_valid_service_token,
+      ].filter(Boolean).length === 1,
+  );
+
+const CreateAccessPolicyInput = z.object({
+  app_id: z.string(),
+  name: z.string(),
+  decision: z.enum(["allow", "deny", "non_identity", "bypass"]).default("allow"),
+  include: z.array(AccessIncludeRuleInput).min(1),
+  precedence: z.number().optional().default(1),
+  dry_run: z.boolean().optional().default(false),
+});
+
+const CreateAccessServiceTokenInput = z.object({
+  name: z.string(),
+  duration: z.string().optional().default("8760h"),
+  dry_run: z.boolean().optional().default(false),
+});
+
 describe("WAF schema", () => {
   it("accepts valid block rule", () => {
     const result = CreateWafInput.safeParse({
@@ -84,6 +118,40 @@ describe("WAF schema", () => {
     expect(CreateWafInput.safeParse({ zone: "example.com" }).success).toBe(false);
     expect(CreateWafInput.safeParse({ expression: "true" }).success).toBe(false);
     expect(CreateWafInput.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("Access schemas", () => {
+  it("accepts a Service Auth policy for a specific service token", () => {
+    const result = CreateAccessPolicyInput.safeParse({
+      app_id: "416eafd8-bc1d-4996-a3fa-749174db5889",
+      name: "Obsidian LiveSync service token",
+      decision: "non_identity",
+      include: [{ service_token: { token_id: "3537a672-e4d8-4d89-aab9-26cb622918a1" } }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.decision).toBe("non_identity");
+      expect(result.data.precedence).toBe(1);
+    }
+  });
+
+  it("rejects a service token rule without token_id", () => {
+    const result = CreateAccessPolicyInput.safeParse({
+      app_id: "app-id",
+      name: "invalid",
+      decision: "non_identity",
+      include: [{ service_token: {} }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("defaults service token duration to one year", () => {
+    const result = CreateAccessServiceTokenInput.parse({
+      name: "Obsidian LiveSync",
+    });
+    expect(result.duration).toBe("8760h");
+    expect(result.dry_run).toBe(false);
   });
 });
 

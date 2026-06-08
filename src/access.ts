@@ -24,6 +24,21 @@ interface AccessPolicy {
   require: Array<Record<string, unknown>>;
 }
 
+interface AccessServiceToken {
+  id: string;
+  name: string;
+  client_id: string;
+  duration: string;
+  expires_at: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface AccessServiceTokenCreateResponse extends AccessServiceToken {
+  client_secret: string;
+  client_secret_version?: number;
+}
+
 // --- list_access_applications ---
 
 const ListAccessAppsInput = z.object({});
@@ -85,39 +100,131 @@ async function listAccessPolicies(input: Record<string, unknown>) {
   return textResult({ app_id, policies, count: policies.length });
 }
 
+// --- list_access_service_tokens ---
+
+const ListAccessServiceTokensInput = z.object({
+  name: z.string().optional().describe("Optional exact service token name filter"),
+});
+
+async function listAccessServiceTokens(input: Record<string, unknown>) {
+  const { name } = ListAccessServiceTokensInput.parse(input);
+  const accountId = await resolveAccount();
+  const tokens = await paginate<AccessServiceToken>(
+    `/accounts/${accountId}/access/service_tokens`,
+  );
+  const filtered = name ? tokens.filter((token) => token.name === name) : tokens;
+  return textResult({ service_tokens: filtered, count: filtered.length });
+}
+
+// --- create_access_service_token ---
+
+const CreateAccessServiceTokenInput = z.object({
+  name: z.string().describe("Service token name"),
+  duration: z
+    .string()
+    .optional()
+    .default("8760h")
+    .describe("How long the token is valid. Defaults to one year."),
+  dry_run: z.boolean().optional().default(false),
+});
+
+async function createAccessServiceToken(input: Record<string, unknown>) {
+  const { name, duration, dry_run } = CreateAccessServiceTokenInput.parse(input);
+  const accountId = await resolveAccount();
+  const serviceToken = { name, duration };
+
+  if (dry_run) {
+    return textResult({
+      dry_run: true,
+      account_id: accountId,
+      would_create: serviceToken,
+      note: "Cloudflare returns the client_secret only on the real create call.",
+    });
+  }
+
+  const res = await cfPost<AccessServiceTokenCreateResponse>(
+    `/accounts/${accountId}/access/service_tokens`,
+    serviceToken,
+  );
+  if (isRateLimited(res)) {
+    throw new Error(`Rate limited. Retry after ${res.retry_after}s.`);
+  }
+  return textResult({
+    created: true,
+    service_token: res.result,
+    warning: "Cloudflare returns client_secret only once. Store it securely now.",
+  });
+}
+
 // --- create_access_policy ---
+
+const AccessIncludeRuleInput = z
+  .object({
+    email: z.object({ email: z.string() }).optional(),
+    email_domain: z.object({ domain: z.string() }).optional(),
+    ip: z.object({ ip: z.string() }).optional(),
+    service_token: z
+      .object({ token_id: z.string().min(1).describe("Access service token ID") })
+      .optional(),
+    any_valid_service_token: z.object({}).optional(),
+  })
+  .refine(
+    (rule) =>
+      [
+        rule.email,
+        rule.email_domain,
+        rule.ip,
+        rule.service_token,
+        rule.any_valid_service_token,
+      ].filter(Boolean).length === 1,
+    "Include rule must contain exactly one selector",
+  );
 
 const CreateAccessPolicyInput = z.object({
   app_id: z.string().describe("Access application ID"),
   name: z.string().describe("Policy name"),
-  decision: z.enum(["allow", "deny", "bypass"]).default("allow"),
+  decision: z.enum(["allow", "deny", "non_identity", "bypass"]).default("allow"),
   include: z
-    .array(
-      z.object({
-        email: z.object({ email: z.string() }).optional(),
-        email_domain: z.object({ domain: z.string() }).optional(),
-        ip: z.object({ ip: z.string() }).optional(),
-        service_token: z.object({}).optional(),
-      }),
-    )
+    .array(AccessIncludeRuleInput)
+    .min(1)
     .describe("Include rules — at least one must match for access"),
   precedence: z.number().optional().default(1),
   dry_run: z.boolean().optional().default(false),
 });
 
+function normalizeIncludeRule(
+  rule: z.infer<typeof AccessIncludeRuleInput>,
+): Record<string, unknown> {
+  if (rule.email) return { email: rule.email };
+  if (rule.email_domain) return { email_domain: rule.email_domain };
+  if (rule.ip) return { ip: rule.ip };
+  if (rule.service_token) return { service_token: rule.service_token };
+  if (rule.any_valid_service_token) return { any_valid_service_token: {} };
+  return rule;
+}
+
+function assertServiceTokenDecision(
+  decision: string,
+  include: Array<z.infer<typeof AccessIncludeRuleInput>>,
+): void {
+  const hasServiceTokenRule = include.some(
+    (rule) => rule.service_token || rule.any_valid_service_token,
+  );
+  if (hasServiceTokenRule && decision !== "non_identity" && decision !== "bypass") {
+    throw new Error(
+      "Service token include rules require decision 'non_identity' (Service Auth) or 'bypass'.",
+    );
+  }
+}
+
 async function createAccessPolicy(input: Record<string, unknown>) {
   const { app_id, name, decision, include, precedence, dry_run } =
     CreateAccessPolicyInput.parse(input);
   const accountId = await resolveAccount();
+  assertServiceTokenDecision(decision, include);
 
   // Flatten include rules into CF format
-  const includeRules = include.map((rule) => {
-    if (rule.email) return { email: rule.email };
-    if (rule.email_domain) return { email_domain: rule.email_domain };
-    if (rule.ip) return { ip: rule.ip };
-    if (rule.service_token) return { service_token: {} };
-    return rule;
-  });
+  const includeRules = include.map(normalizeIncludeRule);
 
   const policy = { name, decision, include: includeRules, precedence };
 
@@ -133,6 +240,29 @@ async function createAccessPolicy(input: Record<string, unknown>) {
     throw new Error(`Rate limited. Retry after ${res.retry_after}s.`);
   }
   return textResult({ created: true, policy: res.result });
+}
+
+// --- create_access_service_token_policy ---
+
+const CreateAccessServiceTokenPolicyInput = z.object({
+  app_id: z.string().describe("Access application ID"),
+  service_token_id: z.string().describe("Access service token ID"),
+  name: z.string().optional().default("Service token access"),
+  precedence: z.number().optional().default(2),
+  dry_run: z.boolean().optional().default(false),
+});
+
+async function createAccessServiceTokenPolicy(input: Record<string, unknown>) {
+  const { app_id, service_token_id, name, precedence, dry_run } =
+    CreateAccessServiceTokenPolicyInput.parse(input);
+  return createAccessPolicy({
+    app_id,
+    name,
+    decision: "non_identity",
+    include: [{ service_token: { token_id: service_token_id } }],
+    precedence,
+    dry_run,
+  });
 }
 
 export const accessTools: ToolDef[] = [
@@ -158,10 +288,32 @@ export const accessTools: ToolDef[] = [
     handler: listAccessPolicies,
   },
   {
+    name: "list_access_service_tokens",
+    description:
+      "List Zero Trust Access service tokens in the account, optionally filtered by exact name.",
+    inputSchema: ListAccessServiceTokensInput,
+    annotations: { readOnlyHint: true },
+    handler: listAccessServiceTokens,
+  },
+  {
+    name: "create_access_service_token",
+    description:
+      "Create a Zero Trust Access service token. Returns client_secret only on creation. Supports dry_run.",
+    inputSchema: CreateAccessServiceTokenInput,
+    handler: createAccessServiceToken,
+  },
+  {
     name: "create_access_policy",
     description:
-      "Create an access policy (allow/deny by email, domain, IP, or service token). Supports dry_run.",
+      "Create an access policy (allow/deny by email, domain, IP, or service token; use non_identity for Service Auth). Supports dry_run.",
     inputSchema: CreateAccessPolicyInput,
     handler: createAccessPolicy,
+  },
+  {
+    name: "create_access_service_token_policy",
+    description:
+      "Create a Service Auth policy for one Access service token on an application. Supports dry_run.",
+    inputSchema: CreateAccessServiceTokenPolicyInput,
+    handler: createAccessServiceTokenPolicy,
   },
 ];
