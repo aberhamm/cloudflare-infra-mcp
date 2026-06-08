@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { cfGet, cfPost, isRateLimited, paginate } from "./utils/cf-client.js";
+import {
+  CfApiError,
+  cfGet,
+  cfPost,
+  isRateLimited,
+  paginate,
+} from "./utils/cf-client.js";
 import { resolveAccount } from "./utils/account-resolver.js";
 import type { ToolDef } from "./server.js";
 import { textResult } from "./server.js";
@@ -37,6 +43,19 @@ interface AccessServiceToken {
 interface AccessServiceTokenCreateResponse extends AccessServiceToken {
   client_secret: string;
   client_secret_version?: number;
+}
+
+type PermissionCheckStatus = "ok" | "missing_permission" | "rate_limited" | "error";
+
+interface PermissionCheck {
+  name: string;
+  endpoint: string;
+  required_permission: string;
+  status: PermissionCheckStatus;
+  status_code?: number;
+  error_codes?: number[];
+  message?: string;
+  retry_after?: number;
 }
 
 // --- list_access_applications ---
@@ -265,6 +284,166 @@ async function createAccessServiceTokenPolicy(input: Record<string, unknown>) {
   });
 }
 
+// --- diagnose_cloudflare_permissions ---
+
+const DiagnoseCloudflarePermissionsInput = z.object({
+  zone_id: z
+    .string()
+    .optional()
+    .describe("Optional zone ID to include zone-scoped DNS and WAF read checks"),
+  app_id: z
+    .string()
+    .optional()
+    .describe("Optional Access application ID to include policy read checks"),
+});
+
+async function runPermissionCheck(
+  name: string,
+  endpoint: string,
+  requiredPermission: string,
+  params?: Record<string, string | number | undefined>,
+): Promise<PermissionCheck> {
+  try {
+    const res = await cfGet<unknown>(endpoint, params);
+    if (isRateLimited(res)) {
+      return {
+        name,
+        endpoint,
+        required_permission: requiredPermission,
+        status: "rate_limited",
+        retry_after: res.retry_after,
+      };
+    }
+    return {
+      name,
+      endpoint,
+      required_permission: requiredPermission,
+      status: "ok",
+    };
+  } catch (err) {
+    if (err instanceof CfApiError) {
+      const message = err.errors.map((e) => e.message).join("; ");
+      const isAuthError =
+        err.status === 401 ||
+        err.status === 403 ||
+        err.errors.some((e) => e.code === 10000 || /auth|permission/i.test(e.message));
+      return {
+        name,
+        endpoint,
+        required_permission: requiredPermission,
+        status: isAuthError ? "missing_permission" : "error",
+        status_code: err.status,
+        error_codes: err.errors.map((e) => e.code),
+        message,
+      };
+    }
+    return {
+      name,
+      endpoint,
+      required_permission: requiredPermission,
+      status: "error",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function diagnoseCloudflarePermissions(input: Record<string, unknown>) {
+  const { zone_id, app_id } = DiagnoseCloudflarePermissionsInput.parse(input);
+  const accountId = await resolveAccount();
+
+  const checks: PermissionCheck[] = [];
+  checks.push(
+    await runPermissionCheck(
+      "cloudflare_tunnel_read",
+      `/accounts/${accountId}/cfd_tunnel`,
+      "Account -> Cloudflare Tunnel -> Read",
+      { per_page: 1 },
+    ),
+  );
+  checks.push(
+    await runPermissionCheck(
+      "access_apps_read",
+      `/accounts/${accountId}/access/apps`,
+      "Account -> Access: Apps and Policies -> Read",
+      { per_page: 1 },
+    ),
+  );
+  checks.push(
+    await runPermissionCheck(
+      "access_service_tokens_read",
+      `/accounts/${accountId}/access/service_tokens`,
+      "Account -> Access: Service Tokens -> Read",
+      { per_page: 1 },
+    ),
+  );
+
+  if (app_id) {
+    checks.push(
+      await runPermissionCheck(
+        "access_policies_read",
+        `/accounts/${accountId}/access/apps/${app_id}/policies`,
+        "Account -> Access: Apps and Policies -> Read",
+        { per_page: 1 },
+      ),
+    );
+  }
+
+  if (zone_id) {
+    checks.push(
+      await runPermissionCheck(
+        "zone_read",
+        `/zones/${zone_id}`,
+        "Zone -> Zone -> Read",
+      ),
+    );
+    checks.push(
+      await runPermissionCheck(
+        "dns_records_read",
+        `/zones/${zone_id}/dns_records`,
+        "Zone -> DNS -> Read",
+        { per_page: 1 },
+      ),
+    );
+    checks.push(
+      await runPermissionCheck(
+        "zone_rulesets_read",
+        `/zones/${zone_id}/rulesets`,
+        "Zone -> Zone Rulesets -> Read",
+        { per_page: 1 },
+      ),
+    );
+  }
+
+  const missing = checks.filter((check) => check.status === "missing_permission");
+  const rateLimited = checks.filter((check) => check.status === "rate_limited");
+  const errors = checks.filter((check) => check.status === "error");
+  const untestedWritePermissions = [
+    "Zone -> DNS -> Edit",
+    "Zone -> Zone Rulesets -> Edit",
+    "Zone -> Zone WAF -> Edit",
+    "Account -> Cloudflare Tunnel -> Edit",
+    "Account -> Access: Apps and Policies -> Edit",
+    "Account -> Access: Service Tokens -> Edit",
+  ];
+
+  return textResult({
+    account_id: accountId,
+    zone_id: zone_id ?? null,
+    app_id: app_id ?? null,
+    checks,
+    summary: {
+      ok: checks.filter((check) => check.status === "ok").length,
+      missing_permission: missing.length,
+      rate_limited: rateLimited.length,
+      error: errors.length,
+    },
+    missing_permissions: missing.map((check) => check.required_permission),
+    untested_write_permissions: untestedWritePermissions,
+    note:
+      "This diagnostic is read-only. Edit permissions cannot be proven without making a mutating Cloudflare API call.",
+  });
+}
+
 export const accessTools: ToolDef[] = [
   {
     name: "list_access_applications",
@@ -315,5 +494,13 @@ export const accessTools: ToolDef[] = [
       "Create a Service Auth policy for one Access service token on an application. Supports dry_run.",
     inputSchema: CreateAccessServiceTokenPolicyInput,
     handler: createAccessServiceTokenPolicy,
+  },
+  {
+    name: "diagnose_cloudflare_permissions",
+    description:
+      "Read-only diagnostic for Cloudflare token permissions across tunnels, Access apps, service tokens, and optional zone checks.",
+    inputSchema: DiagnoseCloudflarePermissionsInput,
+    annotations: { readOnlyHint: true },
+    handler: diagnoseCloudflarePermissions,
   },
 ];

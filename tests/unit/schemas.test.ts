@@ -57,6 +57,11 @@ const CreateAccessServiceTokenInput = z.object({
   dry_run: z.boolean().optional().default(false),
 });
 
+const DiagnoseCloudflarePermissionsInput = z.object({
+  zone_id: z.string().optional(),
+  app_id: z.string().optional(),
+});
+
 describe("WAF schema", () => {
   it("accepts valid block rule", () => {
     const result = CreateWafInput.safeParse({
@@ -152,6 +157,14 @@ describe("Access schemas", () => {
     });
     expect(result.duration).toBe("8760h");
     expect(result.dry_run).toBe(false);
+  });
+
+  it("accepts optional diagnostic context", () => {
+    const result = DiagnoseCloudflarePermissionsInput.safeParse({
+      zone_id: "8066ef16cb9c768b3fe2134f14913611",
+      app_id: "416eafd8-bc1d-4996-a3fa-749174db5889",
+    });
+    expect(result.success).toBe(true);
   });
 });
 

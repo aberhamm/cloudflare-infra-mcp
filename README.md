@@ -71,7 +71,7 @@ Create a scoped token at [dash.cloudflare.com/profile/api-tokens](https://dash.c
 
 Set zone resources to **All zones** or select specific ones. You can start with just DNS and add scopes as needed — tools will return clear auth errors for missing permissions.
 
-## Tools (27)
+## Tools (28)
 
 ### Zones (3)
 
@@ -110,7 +110,7 @@ Set zone resources to **All zones** or select specific ones. You can start with 
 | `get_tunnel_config` | Get ingress configuration |
 | `update_tunnel_config` | Set hostname → service routing |
 
-### Zero Trust Access (7)
+### Zero Trust Access (8)
 
 | Tool | Description |
 |------|-------------|
@@ -121,6 +121,7 @@ Set zone resources to **All zones** or select specific ones. You can start with 
 | `create_access_service_token` | Create a service token and return the one-time client secret |
 | `create_access_policy` | Allow/deny by email, domain, IP, or service token |
 | `create_access_service_token_policy` | Create a Service Auth policy for one service token |
+| `diagnose_cloudflare_permissions` | Read-only permission diagnostic for tunnels, Access, service tokens, and optional zone checks |
 
 ### Composable Operations (3)
 
