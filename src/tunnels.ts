@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { cfGet, cfPost, cfPut, cfDelete, isRateLimited, paginate } from "./utils/cf-client.js";
 import { resolveAccount } from "./utils/account-resolver.js";
@@ -63,7 +64,7 @@ async function createTunnel(input: Record<string, unknown>) {
 
   const res = await cfPost<Tunnel & { token?: string }>(
     `/accounts/${accountId}/cfd_tunnel`,
-    { name, config_src: "cloudflare", tunnel_secret: "" },
+    { name, config_src: "cloudflare", tunnel_secret: randomBytes(32).toString("base64") },
   );
   if (isRateLimited(res)) {
     throw new Error(`Rate limited. Retry after ${res.retry_after}s.`);
