@@ -8,7 +8,7 @@ export interface CfApiResponse<T> {
   result_info?: {
     page: number;
     per_page: number;
-    total_pages: number;
+    total_pages?: number;
     count: number;
     total_count: number;
   };
@@ -67,6 +67,7 @@ async function request<T>(
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15000),
   });
 
   if (res.status === 429) {
@@ -141,7 +142,7 @@ export async function paginate<T>(
     results.push(...res.result);
 
     const info = res.result_info;
-    if (!info || page >= info.total_pages) break;
+    if (!info || !info.total_pages || page >= info.total_pages || res.result.length < perPage) break;
     page++;
   }
 
@@ -161,6 +162,7 @@ export async function cfGetRaw(
 
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${getToken()}` },
+    signal: AbortSignal.timeout(15000),
   });
 
   if (res.status === 429) {
