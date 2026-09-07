@@ -114,8 +114,9 @@ export async function cfPatch<T>(
 
 export async function cfDelete<T = null>(
   path: string,
+  body?: unknown,
 ): Promise<CfApiResponse<T> | CfRateLimited> {
-  return request<T>("DELETE", path);
+  return request<T>("DELETE", path, body);
 }
 
 export function isRateLimited(

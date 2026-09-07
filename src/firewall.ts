@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { cfGet, cfPost, cfPatch, cfDelete, isRateLimited } from "./utils/cf-client.js";
+import { cfGet, cfPost, cfPatch, cfDelete, isRateLimited, paginate } from "./utils/cf-client.js";
 import { resolveZone } from "./utils/zone-resolver.js";
+import { resolveAccount } from "./utils/account-resolver.js";
 import type { ToolDef } from "./server.js";
 import { textResult, errorResult } from "./server.js";
 
@@ -240,6 +241,62 @@ async function listWafManagedRulesets(input: Record<string, unknown>) {
   return textResult({ zone, zone_id: zoneId, managed_rulesets: managed });
 }
 
+// --- Tool: list_ip_list_items ---
+
+interface IpList {
+  id: string;
+  name: string;
+  kind: string;
+  num_items: number;
+}
+
+interface IpListItem {
+  id: string;
+  ip: string;
+  comment: string;
+  created_on: string;
+  modified_on: string;
+}
+
+const ListIpListItemsInput = z.object({
+  list_id: z.string().optional().describe("IP List ID (provide this or list_name)"),
+  list_name: z
+    .string()
+    .optional()
+    .describe("IP List name (alternative to list_id — resolved by lookup)"),
+});
+
+async function listIpListItems(input: Record<string, unknown>) {
+  const { list_id, list_name } = ListIpListItemsInput.parse(input);
+  if (!list_id && !list_name) {
+    return errorResult("Provide list_id or list_name (at least one is required).");
+  }
+  const accountId = await resolveAccount();
+
+  let resolvedId = list_id;
+  let resolvedName = list_name;
+
+  if (!resolvedId) {
+    const lists = await paginate<IpList>(`/accounts/${accountId}/rules/lists`);
+    const match = lists.find((l) => l.name === list_name && l.kind === "ip");
+    if (!match) {
+      return errorResult(`IP list "${list_name}" not found.`);
+    }
+    resolvedId = match.id;
+    resolvedName = match.name;
+  }
+
+  const items = await paginate<IpListItem>(
+    `/accounts/${accountId}/rules/lists/${resolvedId}/items`,
+  );
+  return textResult({
+    list_id: resolvedId,
+    list_name: resolvedName ?? null,
+    items,
+    count: items.length,
+  });
+}
+
 // --- Export all tools ---
 
 export const firewallTools: ToolDef[] = [
@@ -279,5 +336,13 @@ export const firewallTools: ToolDef[] = [
     inputSchema: ListManagedInput,
     annotations: { readOnlyHint: true },
     handler: listWafManagedRulesets,
+  },
+  {
+    name: "list_ip_list_items",
+    description:
+      "List items in a Cloudflare IP List. Look up by list_id or list_name.",
+    inputSchema: ListIpListItemsInput,
+    annotations: { readOnlyHint: true },
+    handler: listIpListItems,
   },
 ];

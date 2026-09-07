@@ -383,6 +383,145 @@ async function setupAccessForTunnel(input: Record<string, unknown>) {
   });
 }
 
+// --- unblock_ips ---
+
+const UnblockIpsInput = z.object({
+  zone: z.string().describe("Domain name or zone ID (for context)"),
+  ips: z.array(z.string()).describe("IP addresses to remove from the block list"),
+  list_name: z
+    .string()
+    .optional()
+    .default("cloudflare_infra_blocked")
+    .describe("Name of the IP List"),
+  dry_run: z.boolean().optional().default(false),
+});
+
+interface IpListItem {
+  id: string;
+  ip: string;
+  comment: string;
+  created_on: string;
+  modified_on: string;
+}
+
+async function unblockIps(input: Record<string, unknown>) {
+  const { zone, ips, list_name, dry_run } = UnblockIpsInput.parse(input);
+  const accountId = await resolveAccount();
+
+  if (dry_run) {
+    return textResult({
+      dry_run: true,
+      steps: [
+        { action: "find_ip_list", params: { name: list_name } },
+        { action: "find_matching_items", params: { ips } },
+        { action: "delete_items_from_list" },
+      ],
+    });
+  }
+
+  const completed: CompletedStep[] = [];
+
+  // Step 1: Find IP list by name
+  let listId: string;
+  try {
+    const lists = await paginate<IpList>(`/accounts/${accountId}/rules/lists`);
+    const match = lists.find((l) => l.name === list_name && l.kind === "ip");
+    if (!match) {
+      return textResult({
+        completed_steps: completed,
+        failed_step: {
+          action: "find_ip_list",
+          error: `IP list "${list_name}" not found.`,
+          cleanup_hint: "No cleanup needed.",
+        },
+      });
+    }
+    listId = match.id;
+    completed.push({ action: "found_ip_list", result: { id: listId, name: list_name } });
+  } catch (err) {
+    return textResult({
+      completed_steps: completed,
+      failed_step: {
+        action: "find_ip_list",
+        error: err instanceof Error ? err.message : String(err),
+        cleanup_hint: "No cleanup needed.",
+      },
+    });
+  }
+
+  // Step 2: Get list items and match against input IPs
+  let itemsToRemove: Array<{ id: string; ip: string }>;
+  let notFound: string[];
+  try {
+    const items = await paginate<IpListItem>(
+      `/accounts/${accountId}/rules/lists/${listId}/items`,
+    );
+    const ipSet = new Set(ips);
+    itemsToRemove = items
+      .filter((item) => ipSet.has(item.ip))
+      .map((item) => ({ id: item.id, ip: item.ip }));
+    notFound = ips.filter((ip) => !items.some((item) => item.ip === ip));
+    completed.push({
+      action: "matched_items",
+      result: { matched: itemsToRemove.length, not_found: notFound },
+    });
+  } catch (err) {
+    return textResult({
+      completed_steps: completed,
+      failed_step: {
+        action: "find_matching_items",
+        error: err instanceof Error ? err.message : String(err),
+        cleanup_hint: "No cleanup needed.",
+      },
+    });
+  }
+
+  if (itemsToRemove.length === 0) {
+    return textResult({
+      completed_steps: completed,
+      final_state: {
+        removed: 0,
+        not_found: notFound,
+        note: "No matching IPs found in the list.",
+      },
+    });
+  }
+
+  // Step 3: Delete matched items
+  try {
+    const deleteBody = { items: itemsToRemove.map((item) => ({ id: item.id })) };
+    const res = await cfDelete(
+      `/accounts/${accountId}/rules/lists/${listId}/items`,
+      deleteBody,
+    );
+    if (isRateLimited(res)) throw new Error("Rate limited");
+    completed.push({
+      action: "removed_ips",
+      result: { count: itemsToRemove.length, ips: itemsToRemove.map((i) => i.ip) },
+    });
+  } catch (err) {
+    return textResult({
+      completed_steps: completed,
+      failed_step: {
+        action: "delete_items_from_list",
+        error: err instanceof Error ? err.message : String(err),
+        cleanup_hint: `Items were identified but not removed from list ${listId}.`,
+      },
+    });
+  }
+
+  return textResult({
+    completed_steps: completed,
+    final_state: {
+      list_id: listId,
+      removed: itemsToRemove.length,
+      removed_ips: itemsToRemove.map((i) => i.ip),
+      not_found: notFound,
+      zone,
+    },
+  });
+}
+
 export const composableTools: ToolDef[] = [
   {
     name: "setup_tunnel_with_dns",
@@ -404,5 +543,12 @@ export const composableTools: ToolDef[] = [
       "Create a Zero Trust Access application and policy for a tunneled hostname. Reports partial progress on failure.",
     inputSchema: SetupAccessInput,
     handler: setupAccessForTunnel,
+  },
+  {
+    name: "unblock_ips",
+    description:
+      "Remove IP addresses from a Cloudflare IP List (complement to block_ips). Reports partial progress on failure.",
+    inputSchema: UnblockIpsInput,
+    handler: unblockIps,
   },
 ];

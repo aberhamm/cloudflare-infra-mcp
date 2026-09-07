@@ -3,12 +3,13 @@ import {
   CfApiError,
   cfGet,
   cfPost,
+  cfDelete,
   isRateLimited,
   paginate,
 } from "./utils/cf-client.js";
 import { resolveAccount } from "./utils/account-resolver.js";
 import type { ToolDef } from "./server.js";
-import { textResult } from "./server.js";
+import { textResult, errorResult } from "./server.js";
 
 interface AccessApp {
   id: string;
@@ -444,6 +445,87 @@ async function diagnoseCloudflarePermissions(input: Record<string, unknown>) {
   });
 }
 
+// --- delete_access_application ---
+
+const DeleteAccessAppInput = z.object({
+  app_id: z.string().describe("Access application ID to delete"),
+});
+
+async function deleteAccessApplication(input: Record<string, unknown>) {
+  const { app_id } = DeleteAccessAppInput.parse(input);
+  const accountId = await resolveAccount();
+
+  const current = await cfGet<AccessApp>(
+    `/accounts/${accountId}/access/apps/${app_id}`,
+  );
+  if (isRateLimited(current)) {
+    throw new Error(`Rate limited. Retry after ${current.retry_after}s.`);
+  }
+
+  const res = await cfDelete(`/accounts/${accountId}/access/apps/${app_id}`);
+  if (isRateLimited(res)) {
+    throw new Error(`Rate limited. Retry after ${res.retry_after}s.`);
+  }
+  return textResult({ deleted: true, app_id, previous_state: current.result });
+}
+
+// --- delete_access_policy ---
+
+const DeleteAccessPolicyInput = z.object({
+  app_id: z.string().describe("Access application ID"),
+  policy_id: z.string().describe("Policy ID to delete"),
+});
+
+async function deleteAccessPolicy(input: Record<string, unknown>) {
+  const { app_id, policy_id } = DeleteAccessPolicyInput.parse(input);
+  const accountId = await resolveAccount();
+
+  const policies = await paginate<AccessPolicy>(
+    `/accounts/${accountId}/access/apps/${app_id}/policies`,
+  );
+  const existing = policies.find((p) => p.id === policy_id);
+  if (!existing) {
+    return errorResult(
+      `Policy ${policy_id} not found on application ${app_id}.`,
+    );
+  }
+
+  const res = await cfDelete(
+    `/accounts/${accountId}/access/apps/${app_id}/policies/${policy_id}`,
+  );
+  if (isRateLimited(res)) {
+    throw new Error(`Rate limited. Retry after ${res.retry_after}s.`);
+  }
+  return textResult({ deleted: true, policy_id, app_id, previous_state: existing });
+}
+
+// --- delete_access_service_token ---
+
+const DeleteAccessServiceTokenInput = z.object({
+  token_id: z.string().describe("Service token ID to delete"),
+});
+
+async function deleteAccessServiceToken(input: Record<string, unknown>) {
+  const { token_id } = DeleteAccessServiceTokenInput.parse(input);
+  const accountId = await resolveAccount();
+
+  const tokens = await paginate<AccessServiceToken>(
+    `/accounts/${accountId}/access/service_tokens`,
+  );
+  const existing = tokens.find((t) => t.id === token_id);
+  if (!existing) {
+    return errorResult(`Service token ${token_id} not found.`);
+  }
+
+  const res = await cfDelete(
+    `/accounts/${accountId}/access/service_tokens/${token_id}`,
+  );
+  if (isRateLimited(res)) {
+    throw new Error(`Rate limited. Retry after ${res.retry_after}s.`);
+  }
+  return textResult({ deleted: true, token_id, previous_state: existing });
+}
+
 export const accessTools: ToolDef[] = [
   {
     name: "list_access_applications",
@@ -502,5 +584,29 @@ export const accessTools: ToolDef[] = [
     inputSchema: DiagnoseCloudflarePermissionsInput,
     annotations: { readOnlyHint: true },
     handler: diagnoseCloudflarePermissions,
+  },
+  {
+    name: "delete_access_application",
+    description:
+      "Delete a Zero Trust Access application. Irreversible — all associated policies are also removed.",
+    inputSchema: DeleteAccessAppInput,
+    annotations: { destructiveHint: true },
+    handler: deleteAccessApplication,
+  },
+  {
+    name: "delete_access_policy",
+    description:
+      "Delete a policy from a Zero Trust Access application. Irreversible.",
+    inputSchema: DeleteAccessPolicyInput,
+    annotations: { destructiveHint: true },
+    handler: deleteAccessPolicy,
+  },
+  {
+    name: "delete_access_service_token",
+    description:
+      "Delete a Zero Trust Access service token. Irreversible — any policies referencing it will stop working.",
+    inputSchema: DeleteAccessServiceTokenInput,
+    annotations: { destructiveHint: true },
+    handler: deleteAccessServiceToken,
   },
 ];
