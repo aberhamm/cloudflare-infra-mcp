@@ -55,6 +55,25 @@ cloudflare-infra:
       env: CLOUDFLARE_API_TOKEN
 ```
 
+### Shared HTTP mode
+
+One server process can serve many clients over Streamable HTTP instead of one stdio copy per session.
+
+```bash
+mkdir -p ~/.config/cloudflare-mcp && chmod 700 ~/.config/cloudflare-mcp
+openssl rand -hex 32 > ~/.config/cloudflare-mcp/bearer.token
+chmod 600 ~/.config/cloudflare-mcp/bearer.token
+
+MCP_TRANSPORT=http MCP_PORT=3110 \
+CLOUDFLARE_MCP_BEARER_TOKEN_FILE=~/.config/cloudflare-mcp/bearer.token \
+node dist/index.js
+```
+
+- Listens on `127.0.0.1` only (`MCP_HOST` changes it; keep it on loopback).
+- Every `/mcp` request needs `Authorization: Bearer <token>`. The server refuses to start in HTTP mode without a token file that is mode `0600` and holds 64 hex characters.
+- Sessions with no request for `MCP_IDLE_SESSION_MINUTES` (default 30) are closed.
+- Clients connect to `http://127.0.0.1:3110/mcp` with the bearer token in an `Authorization` header.
+
 ### API Token
 
 Create a scoped token at [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) with these permissions:
